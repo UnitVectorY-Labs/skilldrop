@@ -1,7 +1,11 @@
 package main
 
 import (
+	"fmt"
+	"os"
 	"runtime/debug"
+
+	skilldrop "github.com/UnitVectorY-Labs/skilldrop/internal/app"
 )
 
 var Version = "dev" // This will be set by the build systems to the release version
@@ -14,9 +18,8 @@ func main() {
 			}
 		}
 	}
-	// TODO: Implement everything
-	// if err := skilldrop.Run(os.Args[1:], os.Stdout, os.Stderr, Version); err != nil {
-	// 	fmt.Fprintln(os.Stderr, "error:", err)
-	// 	os.Exit(1)
-	// }
+	if err := skilldrop.Run(os.Args[1:], os.Stdout, os.Stderr, Version); err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(skilldrop.ExitCode(err))
+	}
 }
