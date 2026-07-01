@@ -1,0 +1,15 @@
+name: skilldrop
+default_branch: main
+config:
+  description: "A command line application for managing Git-backed skill catalogs and safely placing selected skills into agent-specific workspace paths."
+  license: MIT
+  language: go
+  release: release-go
+  justfile: true
+  status: wip
+  release_github: false
+  codecov:
+    enabled: false
+  docs:
+    enabled: true
+    domain: skilldrop.unitvectorylabs.com
