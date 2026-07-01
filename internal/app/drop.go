@@ -20,14 +20,20 @@ type DropRequest struct {
 }
 
 type DropResult struct {
-	Status           string `json:"status"`
-	Skill            string `json:"skill"`
-	Agent            string `json:"agent"`
-	Source           string `json:"source"`
-	Destination      string `json:"destination"`
-	FilesWritten     int    `json:"files_written"`
-	FilesUnchanged   int    `json:"files_unchanged"`
-	FilesOverwritten int    `json:"files_overwritten"`
+	Status           string     `json:"status"`
+	Skill            string     `json:"skill"`
+	Agent            string     `json:"agent"`
+	Source           string     `json:"source"`
+	Destination      string     `json:"destination"`
+	FilesWritten     int        `json:"files_written"`
+	FilesUnchanged   int        `json:"files_unchanged"`
+	FilesOverwritten int        `json:"files_overwritten"`
+	Files            []DropFile `json:"-"`
+}
+
+type DropFile struct {
+	Path   string
+	Action string
 }
 
 type ConflictError struct {
@@ -54,6 +60,19 @@ const (
 	copyOverwrite
 )
 
+func (a copyAction) Label() string {
+	switch a {
+	case copyWrite:
+		return "add"
+	case copyUnchanged:
+		return "same"
+	case copyOverwrite:
+		return "updated"
+	default:
+		return "change"
+	}
+}
+
 func Drop(req DropRequest) (DropResult, error) {
 	source := filepath.Join(req.CacheDir, "catalogs", req.Skill.Repo, filepath.FromSlash(req.Skill.SourcePath))
 	dest := filepath.Join(req.Workspace, filepath.FromSlash(req.Agent.Path), req.Skill.Name)
@@ -73,6 +92,10 @@ func Drop(req DropRequest) (DropResult, error) {
 		return DropResult{}, err
 	}
 	for _, plan := range plans {
+		result.Files = append(result.Files, DropFile{
+			Path:   filepath.ToSlash(plan.rel),
+			Action: plan.action.Label(),
+		})
 		switch plan.action {
 		case copyWrite:
 			result.FilesWritten++

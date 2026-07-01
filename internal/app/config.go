@@ -115,7 +115,7 @@ func loadCatalog(p paths) (Catalog, error) {
 			return Catalog{}, err
 		}
 		for _, skill := range repo.Skills {
-			if skill.Name == "" || skill.SourcePath == "" {
+			if skill.Name == "" || skill.SourcePath == "" || !skill.Enabled {
 				continue
 			}
 			skill.Repo = repo.ID
@@ -193,6 +193,10 @@ func loadRepoConfig(path string) (repoConfig, error) {
 	return repo, nil
 }
 
+func loadRepoConfigByID(p paths, repoID string) (repoConfig, error) {
+	return loadRepoConfig(filepath.Join(p.configDir, "repos", repoID+".yaml"))
+}
+
 func writeRepoConfig(p paths, repo repoConfig) error {
 	path := filepath.Join(p.configDir, "repos", repo.ID+".yaml")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -206,6 +210,35 @@ func writeRepoConfig(p paths, repo repoConfig) error {
 		return &ExitError{Code: ExitMissingConfiguration, Err: err}
 	}
 	return nil
+}
+
+func setRepoSkillEnabled(p paths, repoID string, skillIndex int, enabled bool) (repoConfig, error) {
+	repo, err := loadRepoConfigByID(p, repoID)
+	if err != nil {
+		return repoConfig{}, err
+	}
+	if skillIndex < 0 || skillIndex >= len(repo.Skills) {
+		return repoConfig{}, &ExitError{Code: ExitInvalidUsage, Err: errors.New("skill selection is out of range")}
+	}
+	repo.Skills[skillIndex].Enabled = enabled
+	if err := writeRepoConfig(p, repo); err != nil {
+		return repoConfig{}, err
+	}
+	return loadRepoConfigByID(p, repoID)
+}
+
+func disableCatalogSkill(p paths, skill Skill) error {
+	repo, err := loadRepoConfigByID(p, skill.Repo)
+	if err != nil {
+		return err
+	}
+	for i := range repo.Skills {
+		if repo.Skills[i].Name == skill.Name {
+			repo.Skills[i].Enabled = false
+			return writeRepoConfig(p, repo)
+		}
+	}
+	return &ExitError{Code: ExitSkillNotFound, Err: fmt.Errorf("skill not found: %s", skill.Name)}
 }
 
 type Agent struct {

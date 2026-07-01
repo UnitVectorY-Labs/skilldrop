@@ -37,8 +37,16 @@ func (e *DuplicateSkillError) Error() string {
 }
 
 func RepoAdd(p paths, req RepoAddRequest) (RepoAddResult, error) {
+	repo, err := DiscoverRepo(p, req)
+	if err != nil {
+		return RepoAddResult{}, err
+	}
+	return RegisterRepo(p, repo)
+}
+
+func DiscoverRepo(p paths, req RepoAddRequest) (repoConfig, error) {
 	if req.URL == "" {
-		return RepoAddResult{}, &ExitError{Code: ExitInvalidUsage, Err: errors.New("repo add requires a git URL")}
+		return repoConfig{}, &ExitError{Code: ExitInvalidUsage, Err: errors.New("repo add requires a git URL")}
 	}
 	if req.Branch == "" {
 		req.Branch = "main"
@@ -47,39 +55,20 @@ func RepoAdd(p paths, req RepoAddRequest) (RepoAddResult, error) {
 		req.ID = deriveRepoID(req.URL)
 	}
 	if !validRepoID(req.ID) {
-		return RepoAddResult{}, &ExitError{Code: ExitInvalidUsage, Err: fmt.Errorf("invalid repo id: %s", req.ID)}
+		return repoConfig{}, &ExitError{Code: ExitInvalidUsage, Err: fmt.Errorf("invalid repo id: %s", req.ID)}
 	}
 
 	cloneDir := filepath.Join(p.cacheDir, "catalogs", req.ID)
 	if err := syncRepo(req.URL, req.Branch, cloneDir); err != nil {
-		return RepoAddResult{}, &ExitError{Code: ExitGitSyncFailure, Err: err}
+		return repoConfig{}, &ExitError{Code: ExitGitSyncFailure, Err: err}
 	}
 	discovered, err := scanSkills(cloneDir)
 	if err != nil {
-		return RepoAddResult{}, err
+		return repoConfig{}, err
 	}
 	if len(discovered) == 0 {
-		return RepoAddResult{}, &ExitError{Code: ExitFrontMatterParseFailure, Err: errors.New("no skills found")}
+		return repoConfig{}, &ExitError{Code: ExitFrontMatterParseFailure, Err: errors.New("no skills found")}
 	}
-
-	existing, err := loadCatalogAllowMissing(p)
-	if err != nil {
-		return RepoAddResult{}, err
-	}
-	existingNames := map[string]bool{}
-	for _, skill := range existing.Skills {
-		if skill.Repo != req.ID {
-			existingNames[skill.Name] = true
-		}
-	}
-	seen := map[string]bool{}
-	for _, skill := range discovered {
-		if seen[skill.Name] || existingNames[skill.Name] {
-			return RepoAddResult{}, &DuplicateSkillError{Name: skill.Name}
-		}
-		seen[skill.Name] = true
-	}
-
 	repo := repoConfig{
 		Version: 1,
 		ID:      req.ID,
@@ -88,19 +77,74 @@ func RepoAdd(p paths, req RepoAddRequest) (RepoAddResult, error) {
 	}
 	repo.Git.URL = req.URL
 	repo.Git.Branch = req.Branch
+	return repo, nil
+}
+
+func RegisterRepo(p paths, repo repoConfig) (RepoAddResult, error) {
+	existing, err := loadCatalogAllowMissing(p)
+	if err != nil {
+		return RepoAddResult{}, err
+	}
+	existingNames := map[string]bool{}
+	for _, skill := range existing.Skills {
+		if skill.Repo != repo.ID {
+			existingNames[skill.Name] = true
+		}
+	}
+	seen := map[string]bool{}
+	for _, skill := range repo.Skills {
+		if !skill.Enabled {
+			continue
+		}
+		if seen[skill.Name] || existingNames[skill.Name] {
+			return RepoAddResult{}, &DuplicateSkillError{Name: skill.Name}
+		}
+		seen[skill.Name] = true
+	}
 	if err := writeRepoConfig(p, repo); err != nil {
 		return RepoAddResult{}, err
 	}
-	for i := range discovered {
-		discovered[i].Repo = req.ID
+	for i := range repo.Skills {
+		repo.Skills[i].Repo = repo.ID
 	}
 	return RepoAddResult{
 		Status: "repo_added",
-		Repo:   req.ID,
-		URL:    req.URL,
-		Branch: req.Branch,
-		Skills: discovered,
+		Repo:   repo.ID,
+		URL:    repo.Git.URL,
+		Branch: repo.Git.Branch,
+		Skills: repo.Skills,
 	}, nil
+}
+
+func SyncRepo(p paths, repoID string) (repoConfig, error) {
+	repo, err := loadRepoConfigByID(p, repoID)
+	if err != nil {
+		return repoConfig{}, err
+	}
+	cloneDir := filepath.Join(p.cacheDir, "catalogs", repo.ID)
+	if err := syncRepo(repo.Git.URL, repo.Git.Branch, cloneDir); err != nil {
+		return repoConfig{}, &ExitError{Code: ExitGitSyncFailure, Err: err}
+	}
+	discovered, err := scanSkills(cloneDir)
+	if err != nil {
+		return repoConfig{}, err
+	}
+	enabledByName := map[string]bool{}
+	for _, skill := range repo.Skills {
+		enabledByName[skill.Name] = skill.Enabled
+	}
+	for i := range discovered {
+		if enabled, ok := enabledByName[discovered[i].Name]; ok {
+			discovered[i].Enabled = enabled
+		} else {
+			discovered[i].Enabled = false
+		}
+	}
+	repo.Skills = discovered
+	if err := writeRepoConfig(p, repo); err != nil {
+		return repoConfig{}, err
+	}
+	return loadRepoConfigByID(p, repo.ID)
 }
 
 func syncRepo(repoURL string, branch string, dest string) error {
@@ -135,7 +179,7 @@ func runGit(dir string, args ...string) error {
 }
 
 func scanSkills(root string) ([]Skill, error) {
-	var skills []Skill
+	skills := []Skill{}
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr

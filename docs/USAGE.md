@@ -77,6 +77,7 @@ Copy an enabled catalog skill into one configured agent destination.
 
 ```bash
 skilldrop drop --skill <skill-name> --agent <agent-id>
+skilldrop drop
 skilldrop drop --skill <skill-name> --agent <agent-id> --dry-run
 skilldrop drop --skill <skill-name> --agent <agent-id> --force
 skilldrop drop --skill <skill-name> --agent <agent-id> --json --no-interactive
@@ -95,6 +96,16 @@ Flags:
 | `--interactive` | Reserved for interactive behavior. |
 
 By default, `drop` refuses to overwrite destination files with different content. Existing identical files are left unchanged.
+
+When `--skill` is omitted in an interactive terminal, `drop` shows an inline list of registered catalog skills. Use `up`/`down` or `j`/`k` to move, `enter` to select, and `esc` to cancel. When `--agent` is omitted and multiple agents are configured, `drop` shows the same inline selector for agents. `--json` and `--no-interactive` never prompt.
+
+Human-readable `drop` output lists each copied file relative to the skill destination with a fixed-width status tag:
+
+```text
+[add    ] examples/example.txt
+[same   ] SKILL.md
+[updated] scripts/install.sh
+```
 
 ## `pickup`
 
@@ -133,8 +144,8 @@ The TUI currently provides tabs for:
 
 | Tab | Purpose |
 | --- | --- |
-| `Catalog` | View registered skills. |
-| `Repos` | View registered repositories and add a new repository. |
+| `Catalog` | View enabled catalog skills and disable a skill. |
+| `Repos` | View registered repositories, add a new repository, review discovered skills, open repo details, sync from Git, and toggle discovered skills on or off. |
 | `Agents` | View configured agents, add an agent path, or remove an agent path. |
 
 Keyboard controls:
@@ -143,9 +154,11 @@ Keyboard controls:
 | --- | --- |
 | `left`, `right`, `h`, `l` | Move between tabs. |
 | `up`, `down`, `j`, `k` | Move within the focused list. |
-| `a` | Add an agent path on the Agents tab or a repository on the Repos tab. |
-| `d` | Remove the selected agent path on the Agents tab. |
-| `enter` | Advance or submit an add form. |
+| `a` | Add an agent path on the Agents tab or start adding a repository on the Repos tab. |
+| `d` | Disable the selected Catalog skill or remove the selected agent path on the Agents tab. |
+| `enter` | Open repo details, advance add forms, or register selected discovered skills. |
+| `space` | Toggle a discovered skill on review/detail screens. |
+| `s` | Sync the selected repo from Git on the repo detail screen. |
 | `q`, `esc`, `ctrl+c` | Quit. |
 
 ## `help`

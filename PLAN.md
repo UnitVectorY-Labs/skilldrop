@@ -34,6 +34,15 @@ Goal: provide a script-friendly vertical slice over existing config and cached r
    - Refuse differing existing files unless `--force` is set.
    - Support `--dry-run`, `--json`, and `--no-interactive`.
    - Verify: tests cover dry-run, successful writes, unchanged files, conflicts, and force.
+5. Implement inline interactive `drop` selectors.
+   - Support inline skill selection when `--skill` is omitted.
+   - Support inline agent selection when `--agent` is omitted and multiple agents are configured.
+   - Preserve no-prompt behavior for `--json` and `--no-interactive`.
+   - Verify: tests cover picker navigation/cancel and single-option drop selection.
+6. Improve human-readable `drop` output.
+   - List each affected file relative to the skill destination.
+   - Prefix each file with `[add]`, `[same]`, or `[updated]` as a fixed-width colored tag.
+   - Verify: tests cover relative paths and status tags.
 
 ## Phase 2: Repository Add and Scan
 
@@ -61,26 +70,29 @@ Status: complete for non-interactive CLI onboarding. Interactive review and rena
 
 Goal: provide human-friendly setup and catalog management over the Phase 1 and 2 engine.
 
-Status: in progress. The full-screen tabbed shell, read-only catalog, agent add/remove flow, and repo add/register flow are complete; pickup and richer conflict review screens are still pending.
+Status: in progress. The full-screen tabbed shell, read-only catalog, catalog disable action, agent add/remove flow, staged repo add review, repo details, repo sync, and skill enable/disable flow are complete; pickup and richer conflict review screens are still pending.
 
 1. Add Bubble Tea and Lip Gloss TUI shell.
    - Status: complete.
    - Verify: tests cover TUI model navigation, tab rendering, fresh-storage startup, and command wiring builds.
 2. Implement read-only catalog browser.
    - Status: complete.
-   - Verify: tests cover catalog navigation without dropping skills.
+   - Verify: tests cover catalog navigation without dropping skills and disabling a catalog skill.
 3. Implement agent list/add/remove flow.
    - Status: complete.
    - Verify: tests cover adding and removing agent paths through the TUI model.
 4. Implement repo list/add flow.
    - Status: complete.
-   - Verify: tests cover adding a Git repo through the TUI model, scanning skills, writing repo config, and refreshing the catalog.
-5. Implement skill detail, pickup, and conflict review screens.
+   - Verify: tests cover adding a Git repo through the TUI model, scanning skills, reviewing which skills to enable, writing repo config, and refreshing the catalog.
+5. Implement repo detail, sync, and skill enable/disable flow.
+   - Status: complete.
+   - Verify: tests cover repo detail toggles and sync adding newly discovered skills as disabled.
+6. Implement skill detail, pickup, and conflict review screens.
    - Status: pending.
    - Verify: future focused tests per screen.
-6. Keep every TUI action backed by the same core operations used by CLI commands.
-   - Status: complete for repo add and config-backed agent management.
-   - Verify: TUI repo add uses the same `RepoAdd` core operation as CLI repo add.
+7. Keep every TUI action backed by the same core operations used by CLI commands.
+   - Status: complete for repo discovery/register/sync and config-backed agent management.
+   - Verify: TUI repo add uses the same clone/scan/register operations as CLI repo add.
 
 ## Phase 4: Pickup, Completion, and Polish
 

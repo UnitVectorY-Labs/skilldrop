@@ -233,14 +233,7 @@ func (a *App) runDrop(args []string) error {
 	if flags.JSON {
 		return writeJSON(a.out, result)
 	}
-	if flags.DryRun {
-		fmt.Fprintf(a.out, "Dry run: %s -> %s\n", result.Source, result.Destination)
-	} else {
-		fmt.Fprintf(a.out, "Dropped %s into %s\n", result.Skill, result.Destination)
-	}
-	fmt.Fprintf(a.out, "Files written: %d\n", result.FilesWritten)
-	fmt.Fprintf(a.out, "Files unchanged: %d\n", result.FilesUnchanged)
-	fmt.Fprintf(a.out, "Files overwritten: %d\n", result.FilesOverwritten)
+	writeDropSummary(a.out, result, flags.DryRun)
 	return nil
 }
 
@@ -289,8 +282,28 @@ func (a *App) runPickup(args []string) error {
 }
 
 func (a *App) resolveSkillAndAgent(flags parsedFlags, command string) (Skill, Agent, error) {
+	interactiveDrop := command == "drop" && !flags.NoInteractive && !flags.JSON
+	catalog, err := loadCatalog(a.paths)
+	if err != nil {
+		return Skill{}, Agent{}, err
+	}
+
+	var skill Skill
 	if flags.Skill == "" {
-		return Skill{}, Agent{}, writeDropInputError(a.out, flags.JSON, "missing_skill", fmt.Sprintf("Missing required --skill. Interactive %s skill selection is not implemented yet.", command))
+		if !interactiveDrop {
+			return Skill{}, Agent{}, writeDropInputError(a.out, flags.JSON, "missing_skill", fmt.Sprintf("Missing required --skill. Interactive %s skill selection is not implemented yet.", command))
+		}
+		selected, err := a.selectSkill(catalog.Skills)
+		if err != nil {
+			return Skill{}, Agent{}, err
+		}
+		skill = selected
+	} else {
+		var ok bool
+		skill, ok = catalog.Find(flags.Skill)
+		if !ok {
+			return Skill{}, Agent{}, writeJSONOrTextError(a.out, flags.JSON, ExitSkillNotFound, "skill_not_found", fmt.Sprintf("Skill not found: %s", flags.Skill), "")
+		}
 	}
 
 	agents, err := loadAgents(a.paths)
@@ -301,6 +314,12 @@ func (a *App) resolveSkillAndAgent(flags parsedFlags, command string) (Skill, Ag
 	if agentID == "" {
 		if len(agents) == 1 {
 			agentID = agents[0].ID
+		} else if interactiveDrop {
+			selected, err := a.selectAgent(agents)
+			if err != nil {
+				return Skill{}, Agent{}, err
+			}
+			return skill, selected, nil
 		} else {
 			return Skill{}, Agent{}, writeDropInputError(a.out, flags.JSON, "missing_agent", fmt.Sprintf("Missing required --agent. Interactive %s agent selection is not implemented yet.", command))
 		}
@@ -309,16 +328,49 @@ func (a *App) resolveSkillAndAgent(flags parsedFlags, command string) (Skill, Ag
 	if !ok {
 		return Skill{}, Agent{}, writeJSONOrTextError(a.out, flags.JSON, ExitAgentNotFound, "agent_not_found", fmt.Sprintf("Agent not found: %s", agentID), "")
 	}
-
-	catalog, err := loadCatalog(a.paths)
-	if err != nil {
-		return Skill{}, Agent{}, err
-	}
-	skill, ok := catalog.Find(flags.Skill)
-	if !ok {
-		return Skill{}, Agent{}, writeJSONOrTextError(a.out, flags.JSON, ExitSkillNotFound, "skill_not_found", fmt.Sprintf("Skill not found: %s", flags.Skill), "")
-	}
 	return skill, agent, nil
+}
+
+func (a *App) selectSkill(skills []Skill) (Skill, error) {
+	if len(skills) == 0 {
+		return Skill{}, &ExitError{Code: ExitSkillNotFound, Err: errors.New("no registered skills found")}
+	}
+	if len(skills) == 1 {
+		return skills[0], nil
+	}
+	items := make([]pickerItem, 0, len(skills))
+	for _, skill := range skills {
+		items = append(items, pickerItem{
+			Label:  skill.Name,
+			Detail: skill.Repo + "  " + skill.SourcePath,
+		})
+	}
+	selected, err := runInlinePicker(a.out, "Select a skill", items)
+	if err != nil {
+		return Skill{}, err
+	}
+	return skills[selected], nil
+}
+
+func (a *App) selectAgent(agents []Agent) (Agent, error) {
+	if len(agents) == 0 {
+		return Agent{}, &ExitError{Code: ExitAgentNotFound, Err: errors.New("no configured agents found")}
+	}
+	if len(agents) == 1 {
+		return agents[0], nil
+	}
+	items := make([]pickerItem, 0, len(agents))
+	for _, agent := range agents {
+		items = append(items, pickerItem{
+			Label:  agent.ID,
+			Detail: agent.Path,
+		})
+	}
+	selected, err := runInlinePicker(a.out, "Select an agent", items)
+	if err != nil {
+		return Agent{}, err
+	}
+	return agents[selected], nil
 }
 
 func writeDropInputError(out io.Writer, jsonOutput bool, code string, message string) error {
@@ -349,6 +401,25 @@ func writeDropConflict(out io.Writer, conflict *ConflictError) error {
 		"hint":    "Use --force to overwrite.",
 	})
 	return &ExitError{Code: ExitOverwriteConflict, Err: conflict}
+}
+
+func writeDropSummary(out io.Writer, result DropResult, dryRun bool) {
+	if dryRun {
+		fmt.Fprintf(out, "Dry run: %s -> %s\n", result.Skill, result.Destination)
+	} else {
+		fmt.Fprintf(out, "Dropped %s into %s\n", result.Skill, result.Destination)
+	}
+	for _, file := range result.Files {
+		fmt.Fprintf(out, "%s %s\n", renderDropTag(file.Action), file.Path)
+	}
+}
+
+func renderDropTag(action string) string {
+	tag := fmt.Sprintf("[%-7s]", action)
+	if tuiColorEnabled() {
+		return tuiAccentStyle().Render(tag)
+	}
+	return tag
 }
 
 func writePickupLocalChange(out io.Writer, localChange *LocalChangeError) error {

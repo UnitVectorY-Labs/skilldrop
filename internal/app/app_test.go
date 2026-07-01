@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestListSkillsJSON(t *testing.T) {
@@ -147,6 +148,34 @@ func TestDropForceOverwritesConflict(t *testing.T) {
 	}
 }
 
+func TestDropHumanOutputListsRelativeFileActions(t *testing.T) {
+	env := newTestEnv(t)
+	t.Setenv("NO_COLOR", "1")
+	env.writeStandardConfig()
+	env.writeCacheFile("catalogs/personal/skills/go-cli-builder/SKILL.md", "new\n")
+	env.writeCacheFile("catalogs/personal/skills/go-cli-builder/examples/example.txt", "example\n")
+	env.writeWorkspaceFile(".codex/skills/go-cli-builder/SKILL.md", "old\n")
+	env.chdirWorkspace()
+
+	var out bytes.Buffer
+	err := Run([]string{"drop", "--skill", "go-cli-builder", "--agent", "codex", "--force"}, &out, &bytes.Buffer{}, "test")
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	got := out.String()
+	for _, want := range []string{
+		"[updated] SKILL.md",
+		"[add    ] examples/example.txt",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("output missing %q:\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, env.workspace+"/.codex/skills/go-cli-builder/SKILL.md") {
+		t.Fatalf("file list should use relative paths, got:\n%s", got)
+	}
+}
+
 func TestDropMissingSkillStrictModeReturnsJSONError(t *testing.T) {
 	env := newTestEnv(t)
 	env.writeStandardConfig()
@@ -162,6 +191,54 @@ func TestDropMissingSkillStrictModeReturnsJSONError(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), `"error": "missing_skill"`) {
 		t.Fatalf("expected json missing skill error, got %s", out.String())
+	}
+}
+
+func TestDropAutoSelectsSingleMissingSkillAndAgent(t *testing.T) {
+	env := newTestEnv(t)
+	env.writeStandardConfig()
+	env.writeCacheFile("catalogs/personal/skills/go-cli-builder/SKILL.md", "same\n")
+	env.chdirWorkspace()
+
+	var out bytes.Buffer
+	err := Run([]string{"drop"}, &out, &bytes.Buffer{}, "test")
+	if err != nil {
+		t.Fatalf("Run returned error: %v", err)
+	}
+	if got := env.readWorkspaceFile(".codex/skills/go-cli-builder/SKILL.md"); got != "same\n" {
+		t.Fatalf("unexpected dropped file: %q", got)
+	}
+}
+
+func TestPickerModelSelectsAndCancels(t *testing.T) {
+	model := newPickerModel("Select", []pickerItem{
+		{Label: "one"},
+		{Label: "two"},
+	})
+	updated, _ := model.Update(tea.KeyMsg{Type: tea.KeyDown})
+	model = updated.(pickerModel)
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model = updated.(pickerModel)
+
+	if model.selected != 1 || model.canceled {
+		t.Fatalf("expected selected index 1, got selected=%d canceled=%v", model.selected, model.canceled)
+	}
+
+	model = newPickerModel("Select", []pickerItem{{Label: "one"}})
+	updated, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = updated.(pickerModel)
+	if !model.canceled {
+		t.Fatal("expected picker cancel")
+	}
+}
+
+func TestPickerViewMarksSelectedRow(t *testing.T) {
+	model := newPickerModel("Select", []pickerItem{
+		{Label: "one"},
+		{Label: "two"},
+	})
+	if !strings.Contains(model.View(), "> one") {
+		t.Fatalf("expected selected picker row marker:\n%s", model.View())
 	}
 }
 
@@ -399,12 +476,13 @@ func TestTUIModelAddsAndRemovesAgents(t *testing.T) {
 	}
 }
 
-func TestTUIModelAddsRepoAndRefreshesCatalog(t *testing.T) {
+func TestTUIModelReviewsRepoSkillsBeforeRegistering(t *testing.T) {
 	env := newTestEnv(t)
 	source := env.createGitRepo("source")
 	env.writeRepoFile(source, "skills/go-cli-builder/SKILL.md", "---\nname: go-cli-builder\n---\nBuild Go CLIs.\n")
+	env.writeRepoFile(source, "skills/repo-auditor/SKILL.md", "---\nname: repo-auditor\n---\nAudit repos.\n")
 	env.git(source, "add", ".")
-	env.git(source, "commit", "-m", "add skill")
+	env.git(source, "commit", "-m", "add skills")
 	p := paths{
 		configDir: filepath.Join(env.configHome, "skilldrop"),
 		cacheDir:  filepath.Join(env.cacheHome, "skilldrop"),
@@ -422,16 +500,119 @@ func TestTUIModelAddsRepoAndRefreshesCatalog(t *testing.T) {
 	model.submitRepo()
 
 	if model.err != nil {
-		t.Fatalf("unexpected repo add error: %v", model.err)
+		t.Fatalf("unexpected repo discovery error: %v", model.err)
+	}
+	if model.mode != tuiModeReviewRepo {
+		t.Fatalf("expected review mode, got %v", model.mode)
+	}
+	if len(model.pendingRepo.Skills) != 2 {
+		t.Fatalf("expected two discovered skills, got %+v", model.pendingRepo.Skills)
+	}
+	model.pendingRepo.Skills[1].Enabled = false
+	model.registerPendingRepo()
+
+	if model.err != nil {
+		t.Fatalf("unexpected repo register error: %v", model.err)
 	}
 	if len(model.repos) != 1 || model.repos[0].ID != "personal" {
-		t.Fatalf("unexpected repos after add: %+v", model.repos)
+		t.Fatalf("unexpected repos after register: %+v", model.repos)
 	}
 	if len(model.skills) != 1 || model.skills[0].Name != "go-cli-builder" {
-		t.Fatalf("catalog did not refresh: %+v", model.skills)
+		t.Fatalf("catalog should include only enabled skills: %+v", model.skills)
 	}
-	if !strings.Contains(model.status, "Registered repo personal with 1 skills.") {
+	config := env.readConfig("repos/personal.yaml")
+	if !strings.Contains(config, "name: repo-auditor") || !strings.Contains(config, "enabled: false") {
+		t.Fatalf("repo config should preserve disabled discovered skill:\n%s", config)
+	}
+	if !strings.Contains(model.status, "Registered repo personal with 1 enabled skills.") {
 		t.Fatalf("unexpected status: %q", model.status)
+	}
+}
+
+func TestTUIModelCanDisableCatalogSkill(t *testing.T) {
+	env := newTestEnv(t)
+	env.writeStandardConfig()
+	p := paths{
+		configDir: filepath.Join(env.configHome, "skilldrop"),
+		cacheDir:  filepath.Join(env.cacheHome, "skilldrop"),
+	}
+
+	model := newTUIModel(p, env.workspace)
+	model.disableSelectedCatalogSkill()
+
+	if model.err != nil {
+		t.Fatalf("unexpected disable error: %v", model.err)
+	}
+	if len(model.skills) != 0 {
+		t.Fatalf("catalog should be empty after disabling skill: %+v", model.skills)
+	}
+	if got := env.readConfig("repos/personal.yaml"); !strings.Contains(got, "enabled: false") {
+		t.Fatalf("repo config did not disable skill:\n%s", got)
+	}
+}
+
+func TestTUIModelRepoDetailTogglesSkillEnablement(t *testing.T) {
+	env := newTestEnv(t)
+	env.writeConfig("repos/personal.yaml", "version: 1\nid: personal\nname: Personal Skills\ngit:\n  url: example\n  branch: main\nskills:\n  - name: go-cli-builder\n    source_path: skills/go-cli-builder\n    enabled: false\n")
+	p := paths{
+		configDir: filepath.Join(env.configHome, "skilldrop"),
+		cacheDir:  filepath.Join(env.cacheHome, "skilldrop"),
+	}
+
+	model := newTUIModel(p, env.workspace)
+	model.tab = tuiTabRepos
+	model.startRepoDetail()
+	model.toggleCurrentRepoSkill()
+
+	if model.err != nil {
+		t.Fatalf("unexpected toggle error: %v", model.err)
+	}
+	if len(model.skills) != 1 || model.skills[0].Name != "go-cli-builder" {
+		t.Fatalf("catalog did not include enabled skill: %+v", model.skills)
+	}
+	if got := env.readConfig("repos/personal.yaml"); !strings.Contains(got, "enabled: true") {
+		t.Fatalf("repo config did not enable skill:\n%s", got)
+	}
+}
+
+func TestTUIModelRepoDetailSyncAddsNewSkillsDisabled(t *testing.T) {
+	env := newTestEnv(t)
+	source := env.createGitRepo("source")
+	env.writeRepoFile(source, "skills/one/SKILL.md", "---\nname: one\n---\n")
+	env.git(source, "add", ".")
+	env.git(source, "commit", "-m", "add first skill")
+	p := paths{
+		configDir: filepath.Join(env.configHome, "skilldrop"),
+		cacheDir:  filepath.Join(env.cacheHome, "skilldrop"),
+	}
+	if err := ensureStorage(p); err != nil {
+		t.Fatalf("ensureStorage returned error: %v", err)
+	}
+	if _, err := RepoAdd(p, RepoAddRequest{URL: source, ID: "personal", Branch: "main"}); err != nil {
+		t.Fatalf("RepoAdd returned error: %v", err)
+	}
+
+	env.writeRepoFile(source, "skills/two/SKILL.md", "---\nname: two\n---\n")
+	env.git(source, "add", ".")
+	env.git(source, "commit", "-m", "add second skill")
+
+	model := newTUIModel(p, env.workspace)
+	model.tab = tuiTabRepos
+	model.startRepoDetail()
+	model.syncCurrentRepo()
+
+	if model.err != nil {
+		t.Fatalf("unexpected sync error: %v", model.err)
+	}
+	if len(model.repos[0].Skills) != 2 {
+		t.Fatalf("expected two discovered skills after sync: %+v", model.repos[0].Skills)
+	}
+	if len(model.skills) != 1 || model.skills[0].Name != "one" {
+		t.Fatalf("new skill should stay disabled until selected: %+v", model.skills)
+	}
+	config := env.readConfig("repos/personal.yaml")
+	if !strings.Contains(config, "name: two") || !strings.Contains(config, "enabled: false") {
+		t.Fatalf("synced config should include new disabled skill:\n%s", config)
 	}
 }
 
@@ -450,10 +631,16 @@ func TestTUIModelFreshStorageHasNoSetupTabAndShowsASCII(t *testing.T) {
 		t.Fatalf("unexpected TUI error: %v", model.err)
 	}
 	view := model.View()
+	if !strings.HasPrefix(view, "\n") {
+		t.Fatalf("view should start with a blank line before ASCII art:\n%s", view)
+	}
 	for _, want := range []string{"___| |", "[Catalog]", " Repos ", " Agents ", "No skills registered yet."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
+	}
+	if strings.Contains(view, "Use left/right to move tabs") {
+		t.Fatalf("view should not include redundant default status text:\n%s", view)
 	}
 	if strings.Contains(view, "Setup") {
 		t.Fatalf("view should not include Setup tab:\n%s", view)
@@ -466,6 +653,35 @@ func TestTUIModelFreshStorageHasNoSetupTabAndShowsASCII(t *testing.T) {
 	}
 	if !strings.Contains(model.View(), "Registered Repositories") {
 		t.Fatalf("expected repos tab content:\n%s", model.View())
+	}
+}
+
+func TestTUIColorPolicyUsesOrangeAndHonorsNoColor(t *testing.T) {
+	originalNoColor, hadNoColor := os.LookupEnv("NO_COLOR")
+	if err := os.Unsetenv("NO_COLOR"); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if hadNoColor {
+			_ = os.Setenv("NO_COLOR", originalNoColor)
+		} else {
+			_ = os.Unsetenv("NO_COLOR")
+		}
+	})
+
+	color, ok := tuiAccentStyle().GetForeground().(lipgloss.Color)
+	if !ok || color != lipgloss.Color(tuiAccentColor) {
+		t.Fatalf("expected orange accent color %q, got %#v", tuiAccentColor, tuiAccentStyle().GetForeground())
+	}
+
+	if err := os.Setenv("NO_COLOR", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tuiAccentStyle().GetForeground().(lipgloss.NoColor); !ok {
+		t.Fatalf("expected no foreground color with NO_COLOR, got %#v", tuiAccentStyle().GetForeground())
+	}
+	if _, ok := tuiErrorStyle().GetForeground().(lipgloss.NoColor); !ok {
+		t.Fatalf("expected no error foreground color with NO_COLOR, got %#v", tuiErrorStyle().GetForeground())
 	}
 }
 
