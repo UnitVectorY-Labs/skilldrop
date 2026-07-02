@@ -47,12 +47,26 @@ type tuiModel struct {
 	status      string
 	err         error
 	quitting    bool
+	hover       tuiHoverTarget
 	agentInput  textinput.Model
 	repoInputs  []textinput.Model
 	pendingRepo repoConfig
 }
 
 const tuiAccentColor = "208"
+const tuiScreenTopPadding = 1
+
+const (
+	tuiHoverNone = iota
+	tuiHoverTab
+	tuiHoverRow
+)
+
+type tuiHoverTarget struct {
+	kind int
+	tab  tuiTab
+	row  int
+}
 
 func tuiColorEnabled() bool {
 	_, noColor := os.LookupEnv("NO_COLOR")
@@ -79,6 +93,46 @@ func tuiErrorStyle() lipgloss.Style {
 	return style
 }
 
+func tuiTabActiveStyle() lipgloss.Style {
+	style := lipgloss.NewStyle().Bold(true)
+	if tuiColorEnabled() {
+		style = style.Background(lipgloss.Color(tuiAccentColor)).Foreground(lipgloss.Color("0"))
+	}
+	return style
+}
+
+func tuiTabActiveHoverStyle() lipgloss.Style {
+	style := lipgloss.NewStyle().Bold(true).Reverse(true)
+	if tuiColorEnabled() {
+		style = style.Background(lipgloss.Color("229")).Foreground(lipgloss.Color("0"))
+	}
+	return style
+}
+
+func tuiTabHoverStyle() lipgloss.Style {
+	style := lipgloss.NewStyle().Bold(true).Reverse(true)
+	if tuiColorEnabled() {
+		style = style.Background(lipgloss.Color("236")).Foreground(lipgloss.Color("229"))
+	}
+	return style
+}
+
+func tuiHoverStyle() lipgloss.Style {
+	style := lipgloss.NewStyle().Reverse(true)
+	if tuiColorEnabled() {
+		style = style.Background(lipgloss.Color("236")).Foreground(lipgloss.Color("229"))
+	}
+	return style
+}
+
+func tuiSelectedHoverStyle() lipgloss.Style {
+	style := lipgloss.NewStyle().Bold(true).Reverse(true)
+	if tuiColorEnabled() {
+		style = style.Background(lipgloss.Color("236")).Foreground(lipgloss.Color("229"))
+	}
+	return style
+}
+
 const skilldropASCII = `     _    _ _ _     _                  
  ___| | _(_) | | __| |_ __ ___  _ __  
 / __| |/ / | | |/ _` + "`" + ` | '__/ _ \| '_ \ 
@@ -88,7 +142,7 @@ const skilldropASCII = `     _    _ _ _     _
 
 func (a *App) runTUI() error {
 	model := newTUIModel(a.paths, a.wd)
-	program := tea.NewProgram(model, tea.WithOutput(a.out), tea.WithAltScreen())
+	program := tea.NewProgram(model, tea.WithOutput(a.out), tea.WithAltScreen(), tea.WithMouseAllMotion())
 	_, err := program.Run()
 	if err != nil {
 		return &ExitError{Code: ExitGeneral, Err: err}
@@ -155,8 +209,49 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case tea.KeyMsg:
 		return m.updateKey(msg)
+	case tea.MouseMsg:
+		return m.updateMouse(msg)
 	default:
 		return m, nil
+	}
+}
+
+func (m tuiModel) updateMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	target := m.hitTarget(int(msg.X), int(msg.Y))
+	m.hover = target
+	if msg.Action != tea.MouseActionPress || msg.Button != tea.MouseButtonLeft {
+		return m, nil
+	}
+	switch target.kind {
+	case tuiHoverTab:
+		m.tab = target.tab
+		m.mode = tuiModeNormal
+	case tuiHoverRow:
+		m.selectHoveredRow(target.row)
+		if m.mode == tuiModeRepoDetail && len(m.currentRepo().Skills) > 0 {
+			m.toggleCurrentRepoSkill()
+		} else if m.mode == tuiModeNormal && m.tab == tuiTabRepos && len(m.repos) > 0 {
+			m.startRepoDetail()
+		}
+	}
+	return m, nil
+}
+
+func (m *tuiModel) selectHoveredRow(row int) {
+	switch m.mode {
+	case tuiModeReviewRepo:
+		m.reviewIdx = clampIndex(row, len(m.pendingRepo.Skills))
+	case tuiModeRepoDetail:
+		m.detailIdx = clampIndex(row, len(m.currentRepo().Skills))
+	case tuiModeNormal:
+		switch m.tab {
+		case tuiTabCatalog:
+			m.skillIdx = clampIndex(row, len(m.skills))
+		case tuiTabRepos:
+			m.repoIdx = clampIndex(row, len(m.repos))
+		case tuiTabAgents:
+			m.agentIdx = clampIndex(row, len(m.agents))
+		}
 	}
 }
 
@@ -546,9 +641,17 @@ func (m tuiModel) renderTabs() string {
 	names := []string{"Catalog", "Repos", "Agents"}
 	parts := make([]string, 0, len(names))
 	for i, name := range names {
-		label := " " + name + " "
-		if m.tab == tuiTab(i) {
-			label = tuiAccentStyle().Render("[" + name + "]")
+		tab := tuiTab(i)
+		label := "[" + name + "]"
+		hovered := m.hover.kind == tuiHoverTab && m.hover.tab == tab
+		if m.tab == tab && hovered {
+			label = tuiTabActiveHoverStyle().Render(label)
+		} else if m.tab == tab {
+			label = tuiTabActiveStyle().Render(label)
+		} else if hovered {
+			label = tuiTabHoverStyle().Render(label)
+		} else {
+			label = tuiAccentStyle().Render(label)
 		}
 		parts = append(parts, label)
 	}
@@ -560,18 +663,25 @@ func (m tuiModel) renderCatalog() string {
 	if len(m.skills) == 0 {
 		return out + "  " + tuiMutedStyle().Render("No skills registered yet. Add a repo from the Repos tab.") + "\n"
 	}
+	rows := make([][]string, 0, len(m.skills))
 	for i, skill := range m.skills {
 		cursor := " "
 		if i == m.skillIdx {
-			cursor = ">"
+			cursor = withTUIStyle("selected", ">")
 		}
-		line := fmt.Sprintf("%s %s  %s  %s", cursor, skill.Name, skill.Repo, skill.SourcePath)
-		if i == m.skillIdx {
-			line = tuiAccentStyle().Render(line)
-		}
-		out += line + "\n"
+		rows = append(rows, []string{
+			cursor,
+			m.tuiRowValue(i, skill.Name),
+			skill.Repo,
+			skill.SourcePath,
+		})
 	}
-	return out
+	return out + renderTUITable(m.tableWidth(), []tuiColumn{
+		{name: " ", width: 1},
+		{name: "Skill", width: 24},
+		{name: "Repo", width: 16},
+		{name: "Repo Path", width: 24, flex: true},
+	}, rows)
 }
 
 func (m tuiModel) renderRepoReview() string {
@@ -603,18 +713,29 @@ func (m tuiModel) renderRepos() string {
 	if len(m.repos) == 0 {
 		return out + "  " + tuiMutedStyle().Render("No repositories registered yet. Press a to add one.") + "\n"
 	}
+	rows := make([][]string, 0, len(m.repos))
 	for i, repo := range m.repos {
 		cursor := " "
 		if i == m.repoIdx {
-			cursor = ">"
+			cursor = withTUIStyle("selected", ">")
 		}
-		line := fmt.Sprintf("%s %s  %s  %s  %d skills", cursor, repo.ID, repo.Git.URL, repo.Git.Branch, len(repo.Skills))
-		if i == m.repoIdx {
-			line = tuiAccentStyle().Render(line)
-		}
-		out += line + "\n"
+		rows = append(rows, []string{
+			cursor,
+			m.tuiRowValue(i, repo.ID),
+			repo.Git.URL,
+			repo.Git.Branch,
+			fmt.Sprintf("%d", len(repo.Skills)),
+			"details",
+		})
 	}
-	return out
+	return out + renderTUITable(m.tableWidth(), []tuiColumn{
+		{name: " ", width: 1},
+		{name: "Repo", width: 18},
+		{name: "URL", width: 24, flex: true},
+		{name: "Branch", width: 12},
+		{name: "Skills", width: 6, right: true},
+		{name: "Action", width: 8},
+	}, rows)
 }
 
 func (m tuiModel) renderRepoDetail() string {
@@ -627,22 +748,29 @@ func (m tuiModel) renderRepoDetail() string {
 	if len(repo.Skills) == 0 {
 		return out + "  " + tuiMutedStyle().Render("No skills discovered.") + "\n"
 	}
+	rows := make([][]string, 0, len(repo.Skills))
 	for i, skill := range repo.Skills {
 		cursor := " "
 		if i == m.detailIdx {
-			cursor = ">"
+			cursor = withTUIStyle("selected", ">")
 		}
 		checked := "[ ]"
 		if skill.Enabled {
 			checked = "[x]"
 		}
-		line := fmt.Sprintf("%s %s %s  %s", cursor, checked, skill.Name, skill.SourcePath)
-		if i == m.detailIdx {
-			line = tuiAccentStyle().Render(line)
-		}
-		out += line + "\n"
+		rows = append(rows, []string{
+			cursor,
+			checked,
+			m.tuiRowValue(i, skill.Name),
+			skill.SourcePath,
+		})
 	}
-	return out
+	return out + renderTUITable(m.tableWidth(), []tuiColumn{
+		{name: " ", width: 1},
+		{name: "Enabled", width: 7},
+		{name: "Skill", width: 24},
+		{name: "Repo Path", width: 24, flex: true},
+	}, rows)
 }
 
 func (m tuiModel) renderRepoForm() string {
@@ -666,18 +794,361 @@ func (m tuiModel) renderAgents() string {
 	if len(m.agents) == 0 {
 		return out + "  " + tuiMutedStyle().Render("No agents configured yet. Press a to add one.") + "\n"
 	}
+	rows := make([][]string, 0, len(m.agents))
 	for i, agent := range m.agents {
 		cursor := " "
 		if i == m.agentIdx {
-			cursor = ">"
+			cursor = withTUIStyle("selected", ">")
 		}
-		line := fmt.Sprintf("%s %s  %s", cursor, agent.ID, agent.Path)
-		if i == m.agentIdx {
-			line = tuiAccentStyle().Render(line)
-		}
-		out += line + "\n"
+		rows = append(rows, []string{
+			cursor,
+			m.tuiRowValue(i, agent.ID),
+			agent.Path,
+		})
 	}
-	return out
+	return out + renderTUITable(m.tableWidth(), []tuiColumn{
+		{name: " ", width: 1},
+		{name: "Agent", width: 18},
+		{name: "Path", width: 24, flex: true},
+	}, rows)
+}
+
+func (m tuiModel) tuiRowValue(row int, value string) string {
+	hovered := m.hover.kind == tuiHoverRow && m.hover.row == row
+	selected := false
+	switch m.mode {
+	case tuiModeNormal:
+		switch m.tab {
+		case tuiTabCatalog:
+			selected = row == m.skillIdx
+		case tuiTabRepos:
+			selected = row == m.repoIdx
+		case tuiTabAgents:
+			selected = row == m.agentIdx
+		}
+	case tuiModeReviewRepo:
+		selected = row == m.reviewIdx
+	case tuiModeRepoDetail:
+		selected = row == m.detailIdx
+	}
+	if selected && hovered {
+		return withTUIStyle("selected-hover", value)
+	}
+	if selected {
+		return withTUIStyle("selected", value)
+	}
+	if hovered {
+		return withTUIStyle("hover", value)
+	}
+	return value
+}
+
+func (m tuiModel) tableWidth() int {
+	if m.width <= 0 {
+		return 100
+	}
+	if m.width < 40 {
+		return m.width
+	}
+	return m.width - 1
+}
+
+type tuiColumn struct {
+	name  string
+	width int
+	right bool
+	flex  bool
+	min   int
+}
+
+func renderTUITable(targetWidth int, columns []tuiColumn, rows [][]string) string {
+	var b strings.Builder
+	columns = fitTUIColumns(columns, rows, targetWidth)
+	header := make([]string, len(columns))
+	for i, col := range columns {
+		header[i] = tuiCell(col.name, col.width, col.right)
+	}
+	b.WriteString(tuiHeaderStyle().Render(strings.Join(header, "  ")))
+	b.WriteByte('\n')
+	b.WriteString(tuiLineStyle().Render(strings.Repeat("-", tuiTableLineWidth(columns))))
+	b.WriteByte('\n')
+	for _, row := range rows {
+		values := make([]string, len(columns))
+		for i, col := range columns {
+			value := ""
+			if i < len(row) {
+				value = row[i]
+			}
+			values[i] = tuiStyledCell(value, col.width, col.right)
+		}
+		b.WriteString(strings.Join(values, "  "))
+		b.WriteByte('\n')
+	}
+	return b.String()
+}
+
+func tuiHeaderStyle() lipgloss.Style {
+	style := lipgloss.NewStyle().Bold(true)
+	if tuiColorEnabled() {
+		style = style.Foreground(lipgloss.Color("250"))
+	}
+	return style
+}
+
+func tuiLineStyle() lipgloss.Style {
+	style := lipgloss.NewStyle()
+	if tuiColorEnabled() {
+		style = style.Foreground(lipgloss.Color("238"))
+	}
+	return style
+}
+
+func fitTUIColumns(columns []tuiColumn, rows [][]string, targetWidth int) []tuiColumn {
+	columns = sizeTUIColumnsToContent(columns, rows)
+	if targetWidth <= 0 {
+		return columns
+	}
+	width := tuiTableLineWidth(columns)
+	if width <= targetWidth {
+		for i := range columns {
+			if columns[i].flex {
+				columns[i].width += targetWidth - width
+				break
+			}
+		}
+		return columns
+	}
+	for width > targetWidth {
+		flexIndex := -1
+		for i, col := range columns {
+			if col.flex {
+				flexIndex = i
+				break
+			}
+		}
+		if flexIndex == -1 || columns[flexIndex].width <= minTUIColumnWidth(columns[flexIndex]) {
+			break
+		}
+		columns[flexIndex].width--
+		width--
+	}
+	for width > targetWidth && len(columns) > 3 {
+		columns = columns[:len(columns)-1]
+		width = tuiTableLineWidth(columns)
+	}
+	return columns
+}
+
+func sizeTUIColumnsToContent(columns []tuiColumn, rows [][]string) []tuiColumn {
+	for i := range columns {
+		contentWidth := len(columns[i].name)
+		for _, row := range rows {
+			if i >= len(row) {
+				continue
+			}
+			_, plain := splitTUIStyle(row[i])
+			if len(plain) > contentWidth {
+				contentWidth = len(plain)
+			}
+		}
+		if columns[i].flex {
+			if columns[i].min == 0 {
+				columns[i].min = columns[i].width
+			}
+			if contentWidth > columns[i].width {
+				columns[i].width = contentWidth
+			}
+			continue
+		}
+		if contentWidth < columns[i].width {
+			columns[i].width = contentWidth
+		}
+	}
+	return columns
+}
+
+func minTUIColumnWidth(col tuiColumn) int {
+	minWidth := col.min
+	if minWidth == 0 {
+		minWidth = col.width
+	}
+	if len(col.name) > minWidth {
+		minWidth = len(col.name)
+	}
+	return minWidth
+}
+
+func tuiTableLineWidth(columns []tuiColumn) int {
+	width := 0
+	for i, col := range columns {
+		width += col.width
+		if i > 0 {
+			width += 2
+		}
+	}
+	return width
+}
+
+func tuiStyledCell(value string, width int, right bool) string {
+	styleName, plain := splitTUIStyle(value)
+	rendered := tuiCell(plain, width, right)
+	switch styleName {
+	case "selected":
+		return tuiAccentStyle().Render(rendered)
+	case "hover":
+		return tuiHoverStyle().Render(rendered)
+	case "selected-hover":
+		return tuiSelectedHoverStyle().Render(rendered)
+	default:
+		return rendered
+	}
+}
+
+func tuiCell(value string, width int, right bool) string {
+	if width <= 0 {
+		return ""
+	}
+	if len(value) > width {
+		if width <= 3 {
+			value = value[:width]
+		} else {
+			value = value[:width-3] + "..."
+		}
+	}
+	if right {
+		return fmt.Sprintf("%*s", width, value)
+	}
+	return fmt.Sprintf("%-*s", width, value)
+}
+
+func withTUIStyle(styleName, value string) string {
+	return "\x00" + styleName + "\x00" + value
+}
+
+func splitTUIStyle(value string) (string, string) {
+	if !strings.HasPrefix(value, "\x00") {
+		return "", value
+	}
+	rest := strings.TrimPrefix(value, "\x00")
+	parts := strings.SplitN(rest, "\x00", 2)
+	if len(parts) != 2 {
+		return "", value
+	}
+	return parts[0], parts[1]
+}
+
+func (m tuiModel) hitTarget(x, y int) tuiHoverTarget {
+	if x < 0 || y < 0 {
+		return tuiHoverTarget{}
+	}
+	y += tuiScreenTopPadding
+	lines := m.hitTestLines()
+	if y >= len(lines) {
+		return tuiHoverTarget{}
+	}
+	line := lines[y]
+	for i, name := range []string{"Catalog", "Repos", "Agents"} {
+		label := "[" + name + "]"
+		if tabX := strings.Index(line, label); tabX >= 0 && x >= tabX && x < tabX+len(label) {
+			return tuiHoverTarget{kind: tuiHoverTab, tab: tuiTab(i)}
+		}
+	}
+	return m.rowHitTarget(x, y, lines)
+}
+
+func (m tuiModel) hitTestLines() []string {
+	plain := m
+	plain.hover = tuiHoverTarget{}
+	return strings.Split(stripTUIANSIEscapes(plain.View()), "\n")
+}
+
+func (m tuiModel) rowHitTarget(x, y int, lines []string) tuiHoverTarget {
+	headerY, rows := m.hitTableBounds(lines)
+	if headerY < 0 || rows == 0 {
+		return tuiHoverTarget{}
+	}
+	rowY := headerY + 2
+	if y < rowY || y >= rowY+rows {
+		return tuiHoverTarget{}
+	}
+	if x >= len(lines[y]) {
+		return tuiHoverTarget{}
+	}
+	return tuiHoverTarget{kind: tuiHoverRow, row: y - rowY}
+}
+
+func (m tuiModel) hitTableBounds(lines []string) (int, int) {
+	var headers []string
+	var rows int
+	switch m.mode {
+	case tuiModeReviewRepo:
+		headers = []string{"Skill", "Source"}
+		rows = len(m.pendingRepo.Skills)
+	case tuiModeRepoDetail:
+		headers = []string{"Enabled", "Skill", "Repo Path"}
+		rows = len(m.currentRepo().Skills)
+	case tuiModeNormal:
+		switch m.tab {
+		case tuiTabCatalog:
+			headers = []string{"Skill", "Repo", "Repo Path"}
+			rows = len(m.skills)
+		case tuiTabRepos:
+			headers = []string{"Repo", "URL", "Action"}
+			rows = len(m.repos)
+		case tuiTabAgents:
+			headers = []string{"Agent", "Path"}
+			rows = len(m.agents)
+		}
+	}
+	for i, line := range lines {
+		found := true
+		for _, header := range headers {
+			if !strings.Contains(line, header) {
+				found = false
+				break
+			}
+		}
+		if found {
+			return i, rows
+		}
+	}
+	return -1, 0
+}
+
+func stripTUIANSIEscapes(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] != '\x1b' {
+			b.WriteByte(s[i])
+			continue
+		}
+		i++
+		if i >= len(s) {
+			break
+		}
+		switch s[i] {
+		case '[':
+			for i+1 < len(s) {
+				i++
+				if s[i] >= '@' && s[i] <= '~' {
+					break
+				}
+			}
+		case ']':
+			for i+1 < len(s) {
+				i++
+				if s[i] == '\a' {
+					break
+				}
+				if s[i] == '\x1b' && i+1 < len(s) && s[i+1] == '\\' {
+					i++
+					break
+				}
+			}
+		}
+	}
+	return b.String()
 }
 
 func (m tuiModel) helpText() string {

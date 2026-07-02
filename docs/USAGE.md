@@ -58,8 +58,8 @@ Flags:
 Register a Git repository, clone it into the local cache, scan for `SKILL.md` files, and write a repository config.
 
 ```bash
-skilldrop repo add <git-url> --id <repo-id> --no-interactive
-skilldrop repo add <git-url> --id <repo-id> --branch main --json --no-interactive
+skilldrop repo add <git-url> --id <repo-id>
+skilldrop repo add <git-url> --id <repo-id> --branch main --json
 ```
 
 Flags:
@@ -69,7 +69,7 @@ Flags:
 | `--id <repo-id>` | Set the stable repository ID used for config and cache paths. |
 | `--branch <branch>` | Clone or update from a branch. Defaults to `main`. |
 | `--json` | Print machine-readable JSON output. |
-| `--no-interactive` | Run without prompts. Currently required for `repo add`. |
+| `--no-interactive` | Run without prompts. Accepted for consistency with other commands. |
 
 ## `drop`
 
@@ -144,9 +144,9 @@ The TUI currently provides tabs for:
 
 | Tab | Purpose |
 | --- | --- |
-| `Catalog` | View enabled catalog skills and disable a skill. |
-| `Repos` | View registered repositories, add a new repository, review discovered skills, open repo details, sync from Git, and toggle discovered skills on or off. |
-| `Agents` | View configured agents, add an agent path, or remove an agent path. |
+| `Catalog` | View enabled catalog skills in a table and disable a skill. The skill source column is labeled `Repo Path`. |
+| `Repos` | View registered repositories in a table, add a new repository, review discovered skills, open repo details, sync from Git, and toggle discovered skills on or off. Rows show `details` in the Action column because they open a detail screen. |
+| `Agents` | View configured agents in a table, add an agent path, or remove an agent path. |
 
 Keyboard controls:
 
@@ -160,6 +160,8 @@ Keyboard controls:
 | `space` | Toggle a discovered skill on review/detail screens. |
 | `s` | Sync the selected repo from Git on the repo detail screen. |
 | `q`, `esc`, `ctrl+c` | Quit. |
+
+The TUI also supports mouse hover and click targets on the tab headers and table rows. Clicking a tab switches to it. Clicking a row selects it; on the Repos tab, clicking a repository row opens its detail screen, and clicking a repo detail skill row toggles that skill on or off.
 
 ## `help`
 

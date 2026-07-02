@@ -70,23 +70,23 @@ Status: complete for non-interactive CLI onboarding. Interactive review and rena
 
 Goal: provide human-friendly setup and catalog management over the Phase 1 and 2 engine.
 
-Status: in progress. The full-screen tabbed shell, read-only catalog, catalog disable action, agent add/remove flow, staged repo add review, repo details, repo sync, and skill enable/disable flow are complete; pickup and richer conflict review screens are still pending.
+Status: in progress. The full-screen tabbed shell, read-only catalog, table-based Catalog/Repos/Agents pages, mouse hover/click support, catalog disable action, agent add/remove flow, staged repo add review, repo details, repo sync, and skill enable/disable flow are complete; pickup and richer conflict review screens are still pending.
 
 1. Add Bubble Tea and Lip Gloss TUI shell.
    - Status: complete.
    - Verify: tests cover TUI model navigation, tab rendering, fresh-storage startup, and command wiring builds.
 2. Implement read-only catalog browser.
    - Status: complete.
-   - Verify: tests cover catalog navigation without dropping skills and disabling a catalog skill.
+   - Verify: tests cover catalog navigation without dropping skills, table rendering, mouse row selection, and disabling a catalog skill.
 3. Implement agent list/add/remove flow.
    - Status: complete.
-   - Verify: tests cover adding and removing agent paths through the TUI model.
+   - Verify: tests cover adding and removing agent paths through the TUI model plus table rendering and mouse row selection.
 4. Implement repo list/add flow.
    - Status: complete.
-   - Verify: tests cover adding a Git repo through the TUI model, scanning skills, reviewing which skills to enable, writing repo config, and refreshing the catalog.
+   - Verify: tests cover adding a Git repo through the TUI model, table rendering, mouse row detail opening, scanning skills, reviewing which skills to enable, writing repo config, and refreshing the catalog.
 5. Implement repo detail, sync, and skill enable/disable flow.
    - Status: complete.
-   - Verify: tests cover repo detail toggles and sync adding newly discovered skills as disabled.
+   - Verify: tests cover repo detail keyboard and mouse toggles plus sync adding newly discovered skills as disabled.
 6. Implement skill detail, pickup, and conflict review screens.
    - Status: pending.
    - Verify: future focused tests per screen.

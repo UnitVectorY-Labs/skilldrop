@@ -151,9 +151,6 @@ func (a *App) runRepoAdd(args []string) error {
 	if len(positional) != 1 {
 		return &ExitError{Code: ExitInvalidUsage, Err: errors.New("usage: skilldrop repo add <git-url> [--branch main] [--id repo-id]")}
 	}
-	if !flags.NoInteractive {
-		return &ExitError{Code: ExitInvalidUsage, Err: errors.New("repo add currently requires --no-interactive")}
-	}
 	result, err := RepoAdd(a.paths, RepoAddRequest{
 		URL:    positional[0],
 		ID:     flags.ID,

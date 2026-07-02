@@ -347,7 +347,7 @@ func TestRepoAddClonesScansAndWritesConfig(t *testing.T) {
 	env.chdirWorkspace()
 
 	var out bytes.Buffer
-	err := Run([]string{"repo", "add", source, "--id", "personal", "--branch", "main", "--json", "--no-interactive"}, &out, &bytes.Buffer{}, "test")
+	err := Run([]string{"repo", "add", source, "--id", "personal", "--branch", "main", "--json"}, &out, &bytes.Buffer{}, "test")
 	if err != nil {
 		t.Fatalf("Run returned error: %v", err)
 	}
@@ -634,7 +634,7 @@ func TestTUIModelFreshStorageHasNoSetupTabAndShowsASCII(t *testing.T) {
 	if !strings.HasPrefix(view, "\n") {
 		t.Fatalf("view should start with a blank line before ASCII art:\n%s", view)
 	}
-	for _, want := range []string{"___| |", "[Catalog]", " Repos ", " Agents ", "No skills registered yet."} {
+	for _, want := range []string{"___| |", "[Catalog]", "[Repos]", "[Agents]", "No skills registered yet."} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("view missing %q:\n%s", want, view)
 		}
@@ -653,6 +653,189 @@ func TestTUIModelFreshStorageHasNoSetupTabAndShowsASCII(t *testing.T) {
 	}
 	if !strings.Contains(model.View(), "Registered Repositories") {
 		t.Fatalf("expected repos tab content:\n%s", model.View())
+	}
+}
+
+func TestTUIModelMainTabsRenderTables(t *testing.T) {
+	env := newTestEnv(t)
+	env.writeStandardConfig()
+	p := paths{
+		configDir: filepath.Join(env.configHome, "skilldrop"),
+		cacheDir:  filepath.Join(env.cacheHome, "skilldrop"),
+	}
+
+	model := newTUIModel(p, env.workspace)
+	for _, tc := range []struct {
+		tab     tuiTab
+		want    []string
+		notWant []string
+	}{
+		{tab: tuiTabCatalog, want: []string{"Skill", "Repo", "Repo Path", "----"}, notWant: []string{"Action"}},
+		{tab: tuiTabRepos, want: []string{"Repo", "URL", "Branch", "Action", "details", "----"}},
+		{tab: tuiTabAgents, want: []string{"Agent", "Path", "----"}, notWant: []string{"Action"}},
+	} {
+		model.tab = tc.tab
+		view := stripTUIANSIEscapes(model.View())
+		for _, want := range tc.want {
+			if !strings.Contains(view, want) {
+				t.Fatalf("tab %v view missing %q:\n%s", tc.tab, want, view)
+			}
+		}
+		for _, notWant := range tc.notWant {
+			if strings.Contains(view, notWant) {
+				t.Fatalf("tab %v view should not contain %q:\n%s", tc.tab, notWant, view)
+			}
+		}
+	}
+}
+
+func TestTUIMouseClickSelectsTabsAndRows(t *testing.T) {
+	env := newTestEnv(t)
+	env.writeConfig("agents.yaml", "version: 1\nagents:\n  - id: codex\n    path: .codex/skills\n  - id: cursor\n    path: .cursor/skills\n")
+	env.writeConfig("repos/personal.yaml", "version: 1\nid: personal\nname: Personal Skills\ngit:\n  url: example\n  branch: main\nskills:\n  - name: first\n    source_path: skills/first\n    enabled: true\n  - name: second\n    source_path: skills/second\n    enabled: true\n")
+	p := paths{
+		configDir: filepath.Join(env.configHome, "skilldrop"),
+		cacheDir:  filepath.Join(env.cacheHome, "skilldrop"),
+	}
+
+	model := newTUIModel(p, env.workspace)
+	lines := model.hitTestLines()
+	tabY := findTUILine(t, lines, "[Repos]")
+	updated, _ := model.Update(tea.MouseMsg{
+		X:      strings.Index(lines[tabY], "[Repos]"),
+		Y:      screenTUIY(tabY),
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	model = updated.(tuiModel)
+	if model.tab != tuiTabRepos {
+		t.Fatalf("expected repos tab after click, got %v", model.tab)
+	}
+
+	lines = model.hitTestLines()
+	updated, _ = model.Update(tea.MouseMsg{
+		X:      2,
+		Y:      screenTUIY(findTUILine(t, lines, "personal")),
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	model = updated.(tuiModel)
+	if model.mode != tuiModeRepoDetail {
+		t.Fatalf("expected repo detail after repo row click, got mode %v", model.mode)
+	}
+
+	model.mode = tuiModeNormal
+	model.tab = tuiTabAgents
+	lines = model.hitTestLines()
+	updated, _ = model.Update(tea.MouseMsg{
+		X:      2,
+		Y:      screenTUIY(findTUILine(t, lines, "cursor")),
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	model = updated.(tuiModel)
+	if model.agentIdx != 1 {
+		t.Fatalf("expected second agent selected, got %d", model.agentIdx)
+	}
+	if model.mode != tuiModeNormal {
+		t.Fatalf("agent row click should not change mode, got %v", model.mode)
+	}
+}
+
+func TestTUIMouseMoveSetsHoverTarget(t *testing.T) {
+	env := newTestEnv(t)
+	env.writeStandardConfig()
+	p := paths{
+		configDir: filepath.Join(env.configHome, "skilldrop"),
+		cacheDir:  filepath.Join(env.cacheHome, "skilldrop"),
+	}
+
+	model := newTUIModel(p, env.workspace)
+	lines := model.hitTestLines()
+	tabY := findTUILine(t, lines, "[Catalog]")
+	updated, _ := model.Update(tea.MouseMsg{
+		X:      strings.Index(lines[tabY], "[Catalog]"),
+		Y:      screenTUIY(tabY),
+		Action: tea.MouseActionMotion,
+		Button: tea.MouseButtonNone,
+	})
+	model = updated.(tuiModel)
+	if model.hover.kind != tuiHoverTab || model.hover.tab != tuiTabCatalog {
+		t.Fatalf("expected catalog tab hover, got %#v", model.hover)
+	}
+
+	lines = model.hitTestLines()
+	updated, _ = model.Update(tea.MouseMsg{
+		X:      2,
+		Y:      screenTUIY(findTUILine(t, lines, "go-cli-builder")),
+		Action: tea.MouseActionMotion,
+		Button: tea.MouseButtonNone,
+	})
+	model = updated.(tuiModel)
+	if model.hover.kind != tuiHoverRow || model.hover.row != 0 {
+		t.Fatalf("expected first row hover, got %#v", model.hover)
+	}
+}
+
+func TestTUIMouseClickRepoDetailTogglesSkill(t *testing.T) {
+	env := newTestEnv(t)
+	env.writeConfig("repos/personal.yaml", "version: 1\nid: personal\nname: Personal Skills\ngit:\n  url: example\n  branch: main\nskills:\n  - name: first\n    source_path: skills/first\n    enabled: false\n  - name: second\n    source_path: skills/second\n    enabled: false\n")
+	p := paths{
+		configDir: filepath.Join(env.configHome, "skilldrop"),
+		cacheDir:  filepath.Join(env.cacheHome, "skilldrop"),
+	}
+
+	model := newTUIModel(p, env.workspace)
+	model.tab = tuiTabRepos
+	model.startRepoDetail()
+
+	lines := model.hitTestLines()
+	updated, _ := model.Update(tea.MouseMsg{
+		X:      2,
+		Y:      screenTUIY(findTUILine(t, lines, "first")),
+		Action: tea.MouseActionPress,
+		Button: tea.MouseButtonLeft,
+	})
+	model = updated.(tuiModel)
+	if model.err != nil {
+		t.Fatalf("unexpected toggle error: %v", model.err)
+	}
+	if model.detailIdx != 0 {
+		t.Fatalf("expected first detail row selected, got %d", model.detailIdx)
+	}
+	if len(model.skills) != 1 || model.skills[0].Name != "first" {
+		t.Fatalf("catalog should include clicked enabled skill only: %+v", model.skills)
+	}
+	if got := env.readConfig("repos/personal.yaml"); !strings.Contains(got, "name: first") || !strings.Contains(got, "enabled: true") {
+		t.Fatalf("repo config did not enable clicked skill:\n%s", got)
+	}
+}
+
+func TestTUITableSizingGivesFlexColumnsExtraSpace(t *testing.T) {
+	columns := fitTUIColumns([]tuiColumn{
+		{name: " ", width: 1},
+		{name: "Repo", width: 18},
+		{name: "URL", width: 24, flex: true},
+		{name: "Branch", width: 12},
+		{name: "Skills", width: 6, right: true},
+		{name: "Action", width: 8},
+	}, [][]string{{
+		">",
+		"p",
+		"https://example.com/very/long/repository/path",
+		"main",
+		"12",
+		"details",
+	}}, 100)
+
+	if columns[1].width != len("Repo") {
+		t.Fatalf("repo column should shrink to content/header width, got %d", columns[1].width)
+	}
+	if columns[2].width <= 24 {
+		t.Fatalf("URL column should receive extra width, got %d", columns[2].width)
+	}
+	if got := tuiTableLineWidth(columns); got > 100 {
+		t.Fatalf("table width should fit target, got %d", got)
 	}
 }
 
@@ -683,6 +866,21 @@ func TestTUIColorPolicyUsesOrangeAndHonorsNoColor(t *testing.T) {
 	if _, ok := tuiErrorStyle().GetForeground().(lipgloss.NoColor); !ok {
 		t.Fatalf("expected no error foreground color with NO_COLOR, got %#v", tuiErrorStyle().GetForeground())
 	}
+}
+
+func findTUILine(t *testing.T, lines []string, needle string) int {
+	t.Helper()
+	for i, line := range lines {
+		if strings.Contains(line, needle) {
+			return i
+		}
+	}
+	t.Fatalf("line containing %q not found in:\n%s", needle, strings.Join(lines, "\n"))
+	return -1
+}
+
+func screenTUIY(renderedLine int) int {
+	return renderedLine - tuiScreenTopPadding
 }
 
 type testEnv struct {
