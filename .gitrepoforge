@@ -1,6 +1,7 @@
 name: skilldrop
 default_branch: main
 config:
+  osv: sarif
   description: "A command line application for managing Git-backed skill catalogs and safely placing selected skills into agent-specific workspace paths."
   license: MIT
   language: go
