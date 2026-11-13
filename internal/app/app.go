@@ -1,7 +1,8 @@
 package skilldrop
 
 import (
-	"encoding/json"
+	"encoding/json/jsontext"
+	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -431,9 +432,8 @@ func writePickupLocalChange(out io.Writer, localChange *LocalChangeError) error 
 }
 
 func writeJSON(out io.Writer, v any) error {
-	encoder := json.NewEncoder(out)
-	encoder.SetIndent("", "  ")
-	return encoder.Encode(v)
+	encoder := jsontext.NewEncoder(out, jsontext.WithIndent("  "))
+	return json.MarshalEncode(encoder, v)
 }
 
 type parsedFlags struct {

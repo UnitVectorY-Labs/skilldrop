@@ -2,7 +2,7 @@ package skilldrop
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -32,6 +32,28 @@ func TestListSkillsJSON(t *testing.T) {
 	}
 	if len(payload.Skills) != 1 || payload.Skills[0].Name != "go-cli-builder" || payload.Skills[0].Repo != "personal" {
 		t.Fatalf("unexpected skills: %+v", payload.Skills)
+	}
+}
+
+func TestWriteJSONV2Output(t *testing.T) {
+	var out bytes.Buffer
+	value := struct {
+		Text   string   `json:"text"`
+		Skills []string `json:"skills"`
+	}{Text: "<skill>"}
+	if err := writeJSON(&out, value); err != nil {
+		t.Fatal(err)
+	}
+	want := "{\n  \"text\": \"<skill>\",\n  \"skills\": []\n}\n"
+	if out.String() != want {
+		t.Fatalf("got %q, want %q", out.String(), want)
+	}
+}
+
+func TestWriteJSONRejectsInvalidUTF8(t *testing.T) {
+	var out bytes.Buffer
+	if err := writeJSON(&out, string([]byte{0xff})); err == nil {
+		t.Fatal("expected invalid UTF-8 to be rejected")
 	}
 }
 
