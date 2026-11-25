@@ -9,8 +9,6 @@ config:
   justfile: true
   status: wip
   release_github: false
-  codecov:
-    enabled: false
   docs:
     enabled: true
     domain: skilldrop.unitvectorylabs.com
